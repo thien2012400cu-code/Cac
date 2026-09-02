@@ -103,7 +103,23 @@ public class AutoBuildModule extends Module {
         if (schematicWorld == null) return result;
 
         try {
-            Method getBlockState = schematicWorld.getClass().getMethod("getBlockState", BlockPos.class);
+            Method getBlockState = null;
+            for (Method m : schematicWorld.getClass().getMethods()) {
+                if (m.getName().equals("getBlockState") && m.getParameterCount() == 1
+                    && m.getParameterTypes()[0] == BlockPos.class) {
+                    getBlockState = m;
+                    break;
+                }
+            }
+            if (getBlockState == null) {
+                AddonTemplate.LOG.warn("[AutoBuild] Khong tim thay getBlockState(BlockPos). Danh sach ham co san:");
+                for (Method m : schematicWorld.getClass().getMethods()) {
+                    if (m.getName().toLowerCase().contains("block") && m.getName().toLowerCase().contains("state")) {
+                        AddonTemplate.LOG.warn("[AutoBuild]   -> " + m);
+                    }
+                }
+                return result;
+            }
 
             BlockPos playerPos = mc.player.getBlockPos();
             int r = scanRadius.get();
@@ -147,7 +163,6 @@ public class AutoBuildModule extends Module {
 
                 Object world = null;
 
-                // Cach 1: getSchematicWorld() la ham STATIC, goi thang tren class
                 try {
                     Method staticGetWorld = handlerClass.getMethod("getSchematicWorld");
                     world = staticGetWorld.invoke(null);
