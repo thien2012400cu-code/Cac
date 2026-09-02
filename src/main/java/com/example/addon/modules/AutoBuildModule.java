@@ -56,6 +56,7 @@ public class AutoBuildModule extends Module {
 
     private final Deque<PendingPlacement> queue = new ArrayDeque<>();
     private int rescanTimer = 0;
+    private boolean dumpedMethods = false;
 
     public AutoBuildModule() {
         super(AddonTemplate.CATEGORY, "auto-build", "Tu dong dat block theo schematic Litematica dang active.");
@@ -65,6 +66,7 @@ public class AutoBuildModule extends Module {
     public void onActivate() {
         queue.clear();
         rescanTimer = 0;
+        dumpedMethods = false;
         AddonTemplate.LOG.info("[AutoBuild] Module bat len.");
     }
 
@@ -112,11 +114,12 @@ public class AutoBuildModule extends Module {
                 }
             }
             if (getBlockState == null) {
-                AddonTemplate.LOG.warn("[AutoBuild] Khong tim thay getBlockState(BlockPos). Danh sach ham co san:");
-                for (Method m : schematicWorld.getClass().getMethods()) {
-                    if (m.getName().toLowerCase().contains("block") && m.getName().toLowerCase().contains("state")) {
+                if (!dumpedMethods) {
+                    AddonTemplate.LOG.warn("[AutoBuild] Khong tim thay getBlockState(BlockPos). TOAN BO danh sach ham cua class " + schematicWorld.getClass().getName() + ":");
+                    for (Method m : schematicWorld.getClass().getMethods()) {
                         AddonTemplate.LOG.warn("[AutoBuild]   -> " + m);
                     }
+                    dumpedMethods = true;
                 }
                 return result;
             }
@@ -159,34 +162,27 @@ public class AutoBuildModule extends Module {
         for (String className : candidateClasses) {
             try {
                 Class<?> handlerClass = Class.forName(className);
-                AddonTemplate.LOG.info("[AutoBuild] Tim thay class: " + className);
 
                 Object world = null;
 
                 try {
                     Method staticGetWorld = handlerClass.getMethod("getSchematicWorld");
                     world = staticGetWorld.invoke(null);
-                    AddonTemplate.LOG.info("[AutoBuild] Da goi getSchematicWorld() dang static.");
                 } catch (NoSuchMethodException noStatic) {
                     try {
                         Method getInstance = handlerClass.getMethod("getInstance");
                         Object handler = getInstance.invoke(null);
                         Method getWorld = handlerClass.getMethod("getSchematicWorld");
                         world = getWorld.invoke(handler);
-                        AddonTemplate.LOG.info("[AutoBuild] Da goi qua getInstance().getSchematicWorld().");
                     } catch (Exception fallbackEx) {
                         AddonTemplate.LOG.warn("[AutoBuild] Ca 2 cach goi deu that bai: " + fallbackEx);
                     }
                 }
 
                 if (world != null) {
-                    AddonTemplate.LOG.info("[AutoBuild] Lay duoc schematic world OK: " + world.getClass().getName());
                     return world;
-                } else {
-                    AddonTemplate.LOG.warn("[AutoBuild] getSchematicWorld() tra ve null - co the chua load/active schematic nao.");
                 }
             } catch (ClassNotFoundException ignored) {
-                AddonTemplate.LOG.info("[AutoBuild] Khong thay class: " + className);
             } catch (Exception e) {
                 AddonTemplate.LOG.warn("[AutoBuild] Tim thay class " + className + " nhung goi loi: " + e);
             }
