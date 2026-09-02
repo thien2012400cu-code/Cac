@@ -145,11 +145,24 @@ public class AutoBuildModule extends Module {
                 Class<?> handlerClass = Class.forName(className);
                 AddonTemplate.LOG.info("[AutoBuild] Tim thay class: " + className);
 
-                Method getInstance = handlerClass.getMethod("getInstance");
-                Object handler = getInstance.invoke(null);
+                Object world = null;
 
-                Method getSchematicWorld = handlerClass.getMethod("getSchematicWorld");
-                Object world = getSchematicWorld.invoke(handler);
+                // Cach 1: getSchematicWorld() la ham STATIC, goi thang tren class
+                try {
+                    Method staticGetWorld = handlerClass.getMethod("getSchematicWorld");
+                    world = staticGetWorld.invoke(null);
+                    AddonTemplate.LOG.info("[AutoBuild] Da goi getSchematicWorld() dang static.");
+                } catch (NoSuchMethodException noStatic) {
+                    try {
+                        Method getInstance = handlerClass.getMethod("getInstance");
+                        Object handler = getInstance.invoke(null);
+                        Method getWorld = handlerClass.getMethod("getSchematicWorld");
+                        world = getWorld.invoke(handler);
+                        AddonTemplate.LOG.info("[AutoBuild] Da goi qua getInstance().getSchematicWorld().");
+                    } catch (Exception fallbackEx) {
+                        AddonTemplate.LOG.warn("[AutoBuild] Ca 2 cach goi deu that bai: " + fallbackEx);
+                    }
+                }
 
                 if (world != null) {
                     AddonTemplate.LOG.info("[AutoBuild] Lay duoc schematic world OK: " + world.getClass().getName());
