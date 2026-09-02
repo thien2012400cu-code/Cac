@@ -65,6 +65,7 @@ public class AutoBuildModule extends Module {
     public void onActivate() {
         queue.clear();
         rescanTimer = 0;
+        AddonTemplate.LOG.info("[AutoBuild] Module bat len.");
     }
 
     @EventHandler
@@ -74,6 +75,9 @@ public class AutoBuildModule extends Module {
         if (rescanTimer <= 0) {
             queue.clear();
             queue.addAll(getMissingPositions());
+            if (!queue.isEmpty()) {
+                AddonTemplate.LOG.info("[AutoBuild] Tim thay " + queue.size() + " vi tri can dat.");
+            }
             rescanTimer = 20;
         } else {
             rescanTimer--;
@@ -121,7 +125,7 @@ public class AutoBuildModule extends Module {
                 }
             }
         } catch (Exception e) {
-            AddonTemplate.LOG.error("Loi khi doc du lieu Litematica qua reflection", e);
+            AddonTemplate.LOG.error("[AutoBuild] Loi khi doc du lieu Litematica qua reflection", e);
         }
 
         result.sort(java.util.Comparator.comparingDouble(p ->
@@ -139,16 +143,24 @@ public class AutoBuildModule extends Module {
         for (String className : candidateClasses) {
             try {
                 Class<?> handlerClass = Class.forName(className);
+                AddonTemplate.LOG.info("[AutoBuild] Tim thay class: " + className);
+
                 Method getInstance = handlerClass.getMethod("getInstance");
                 Object handler = getInstance.invoke(null);
 
                 Method getSchematicWorld = handlerClass.getMethod("getSchematicWorld");
                 Object world = getSchematicWorld.invoke(handler);
 
-                if (world != null) return world;
+                if (world != null) {
+                    AddonTemplate.LOG.info("[AutoBuild] Lay duoc schematic world OK: " + world.getClass().getName());
+                    return world;
+                } else {
+                    AddonTemplate.LOG.warn("[AutoBuild] getSchematicWorld() tra ve null - co the chua load/active schematic nao.");
+                }
             } catch (ClassNotFoundException ignored) {
+                AddonTemplate.LOG.info("[AutoBuild] Khong thay class: " + className);
             } catch (Exception e) {
-                AddonTemplate.LOG.warn("Tim thay class " + className + " nhung goi loi: " + e.getMessage());
+                AddonTemplate.LOG.warn("[AutoBuild] Tim thay class " + className + " nhung goi loi: " + e);
             }
         }
 
@@ -156,9 +168,7 @@ public class AutoBuildModule extends Module {
     }
 
     private boolean tryPlace(PendingPlacement p) {
-        if (mc.player.getBlockPos().isWithinDistance(p.pos(), reach.get())) {
-            // trong tam voi
-        } else {
+        if (!mc.player.getBlockPos().isWithinDistance(p.pos(), reach.get())) {
             return false;
         }
 
