@@ -12,32 +12,10 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 
-// --- Import Litematica ---
-// LƯU Ý PACKAGE: các bản Litematica gần đây (build chính chủ maruohon cho MC mới)
-// đã đổi package từ "fi.dy.masa.litematica.*" sang "litematica.*".
-// Một số fork phổ biến (vd sakura-ryoko) VẪN dùng "fi.dy.masa.litematica.*".
-// -> Mở jar Litematica bạn đang cài (hoặc gõ "litematica." trong IDE và để
-// auto-import gợi ý) để biết chính xác package nào áp dụng cho bản của bạn,
-// rồi sửa 2 dòng import bên dưới cho khớp.
-import litematica.data.DataManager;
-import litematica.world.SchematicWorldHandler;
-import litematica.world.WorldSchematic;
-// Nếu IDE báo không tìm thấy 2 class trên, thử thay bằng:
-// import fi.dy.masa.litematica.data.DataManager;
-// import fi.dy.masa.litematica.world.SchematicWorldHandler;
-// import fi.dy.masa.litematica.world.WorldSchematic;
-
+import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.Deque;
 
-/**
- * Module tự động đặt block khớp với schematic đang active trong Litematica.
- *
- * QUAN TRỌNG: phần đọc dữ liệu từ Litematica (getMissingPositions) là SKELETON.
- * Litematica dùng internal API đổi theo version -> bạn cần mở source Litematica
- * đúng version của mình (github.com/maruohon/litematica) để lấy đúng class/method,
- * rồi thay vào TODO bên dưới.
- */
 public class AutoBuildModule extends Module {
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -76,7 +54,6 @@ public class AutoBuildModule extends Module {
         .build()
     );
 
-    // Hàng đợi các vị trí cần đặt, tính lại định kỳ thay vì mỗi tick (đỡ tốn CPU)
     private final Deque<PendingPlacement> queue = new ArrayDeque<>();
     private int rescanTimer = 0;
 
@@ -94,7 +71,6 @@ public class AutoBuildModule extends Module {
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
 
-        // Định kỳ quét lại danh sách vị trí còn thiếu (mỗi 20 tick = 1 giây)
         if (rescanTimer <= 0) {
             queue.clear();
             queue.addAll(getMissingPositions());
@@ -110,75 +86,89 @@ public class AutoBuildModule extends Module {
                 queue.pollFirst();
                 placed++;
             } else {
-                // Không đặt được (quá xa, không có mặt kề...) -> bỏ qua vòng này, thử lại lần quét sau
                 queue.pollFirst();
             }
         }
     }
 
-    /**
-     * Quét quanh người chơi, so sánh block trong "world ảo" của Litematica
-     * (world chỉ dùng để render ghost-block, chứa toàn bộ schematic đang active)
-     * với world thật, trả về danh sách vị trí còn thiếu.
-     *
-     * Dựa trên cơ chế thật của Litematica: hệ thống render của nó cũng làm
-     * đúng việc so sánh schematicWorldView.getBlockState() vs clientWorldView.getBlockState()
-     * để quyết định vẽ ghost-block ở đâu — ở đây mình tái dùng world đó thay vì
-     * tự parse container NBT thô, đỡ phải lo version-specific data structure.
-     */
     private java.util.List<PendingPlacement> getMissingPositions() {
         java.util.List<PendingPlacement> result = new java.util.ArrayList<>();
         if (mc.player == null || mc.world == null) return result;
 
-        WorldSchematic schematicWorld = SchematicWorldHandler.getInstance().getSchematicWorld();
-        // Nếu API bản bạn không có getInstance()/getSchematicWorld() y hệt vậy,
-        // thử: DataManager.getSchematicPlacementManager() rồi tìm phương thức
-        // tương đương trả về world/handler chứa dữ liệu ghost-block.
+        Object schematicWorld = getSchematicWorldViaReflection();
         if (schematicWorld == null) return result;
 
-        BlockPos playerPos = mc.player.getBlockPos();
-        int r = scanRadius.get();
+        try {
+            Method getBlockState = schematicWorld.getClass().getMethod("getBlockState", BlockPos.class);
 
-        BlockPos.Mutable mutable = new BlockPos.Mutable();
-        for (int dx = -r; dx <= r; dx++) {
-            for (int dy = -r; dy <= r; dy++) {
-                for (int dz = -r; dz <= r; dz++) {
-                    mutable.set(playerPos.getX() + dx, playerPos.getY() + dy, playerPos.getZ() + dz);
+            BlockPos playerPos = mc.player.getBlockPos();
+            int r = scanRadius.get();
 
-                    BlockState desired = schematicWorld.getBlockState(mutable);
-                    if (desired.isAir()) continue; // schematic không yêu cầu block ở đây
+            BlockPos.Mutable mutable = new BlockPos.Mutable();
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dy = -r; dy <= r; dy++) {
+                    for (int dz = -r; dz <= r; dz++) {
+                        mutable.set(playerPos.getX() + dx, playerPos.getY() + dy, playerPos.getZ() + dz);
 
-                    BlockState real = mc.world.getBlockState(mutable);
-                    if (real.isAir() && !desired.equals(real)) {
-                        result.add(new PendingPlacement(mutable.toImmutable(), desired));
+                        BlockState desired = (BlockState) getBlockState.invoke(schematicWorld, mutable);
+                        if (desired == null || desired.isAir()) continue;
+
+                        BlockState real = mc.world.getBlockState(mutable);
+                        if (real.isAir()) {
+                            result.add(new PendingPlacement(mutable.toImmutable(), desired));
+                        }
                     }
-                    // Không xử lý trường hợp block sai loại đang chiếm chỗ (cần phá trước) -
-                    // module này chỉ ĐẶT, không PHÁ, để tránh nguy hiểm (phá nhầm base...).
                 }
             }
+        } catch (Exception e) {
+            AddonTemplate.LOG.error("Loi khi doc du lieu Litematica qua reflection", e);
         }
 
-        // Sắp theo khoảng cách gần người chơi trước, để đặt hợp lý hơn
         result.sort(java.util.Comparator.comparingDouble(p ->
-            p.pos().getSquaredDistance(mc.player.getPos())));
+            p.pos().getSquaredDistance(mc.player.getBlockPos())));
 
         return result;
     }
 
-    /**
-     * Thử đặt 1 block: tìm mặt kề (Direction) có block thật đã tồn tại để "click" vào,
-     * giống hành vi người chơi thật, rồi gọi interactionManager để gửi packet place.
-     */
-    private boolean tryPlace(PendingPlacement p) {
-        if (mc.player.getPos().distanceTo(Vec3d.ofCenter(p.pos)) > reach.get()) return false;
+    private Object getSchematicWorldViaReflection() {
+        String[] candidateClasses = {
+            "litematica.world.SchematicWorldHandler",
+            "fi.dy.masa.litematica.world.SchematicWorldHandler"
+        };
 
-        Direction supportFace = findSupportFace(p.pos);
-        if (supportFace == null) {
-            if (requireExistingSupport.get()) return false;
-            supportFace = Direction.UP; // fallback đơn giản nếu không cần support
+        for (String className : candidateClasses) {
+            try {
+                Class<?> handlerClass = Class.forName(className);
+                Method getInstance = handlerClass.getMethod("getInstance");
+                Object handler = getInstance.invoke(null);
+
+                Method getSchematicWorld = handlerClass.getMethod("getSchematicWorld");
+                Object world = getSchematicWorld.invoke(handler);
+
+                if (world != null) return world;
+            } catch (ClassNotFoundException ignored) {
+            } catch (Exception e) {
+                AddonTemplate.LOG.warn("Tim thay class " + className + " nhung goi loi: " + e.getMessage());
+            }
         }
 
-        BlockPos neighborPos = p.pos.offset(supportFace.getOpposite());
+        return null;
+    }
+
+    private boolean tryPlace(PendingPlacement p) {
+        if (mc.player.getBlockPos().isWithinDistance(p.pos(), reach.get())) {
+            // trong tam voi
+        } else {
+            return false;
+        }
+
+        Direction supportFace = findSupportFace(p.pos());
+        if (supportFace == null) {
+            if (requireExistingSupport.get()) return false;
+            supportFace = Direction.UP;
+        }
+
+        BlockPos neighborPos = p.pos().offset(supportFace.getOpposite());
         Vec3d hitVec = Vec3d.ofCenter(neighborPos).add(
             supportFace.getOffsetX() * 0.5,
             supportFace.getOffsetY() * 0.5,
@@ -186,9 +176,6 @@ public class AutoBuildModule extends Module {
         );
 
         BlockHitResult hitResult = new BlockHitResult(hitVec, supportFace, neighborPos, false);
-
-        // TODO: đảm bảo đúng item đang cầm trên hotbar khớp với p.state trước khi place
-        // (tìm slot chứa item tương ứng, switch hotbar, hoặc dùng inventory swap nếu creative).
 
         mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
         mc.player.swingHand(Hand.MAIN_HAND);
@@ -206,4 +193,4 @@ public class AutoBuildModule extends Module {
     }
 
     private record PendingPlacement(BlockPos pos, BlockState state) {}
-  }
+}
