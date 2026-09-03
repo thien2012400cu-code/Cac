@@ -191,7 +191,7 @@ public class AutoBuildModule extends Module {
             ItemStack stack = mc.player.getInventory().getStack(slot);
             if (stack.isEmpty()) continue;
             if (stack.getItem() instanceof BlockItem blockItem && blockItem.getBlock() == desiredBlock) {
-                mc.player.getInventory().selectedSlot = slot;
+                mc.player.getInventory().setSelectedSlot(slot);
                 return true;
             }
         }
