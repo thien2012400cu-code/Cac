@@ -12,13 +12,11 @@ import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.state.property.Property;
 import net.minecraft.state.property.EnumProperty;
-import net.minecraft.state.property.BooleanProperty;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.util.StringIdentifiable;
 import net.minecraft.world.World;
 
 import java.lang.reflect.Method;
@@ -63,7 +61,6 @@ public class AutoBuildModule extends Module {
         .build()
     );
 
-    // Danh sach vi tri vua dat, can kiem tra lai/chinh trang thai (click-toggle)
     private final Deque<PendingPlacement> queue = new ArrayDeque<>();
     private final Deque<FixupTask> fixupQueue = new ArrayDeque<>();
     private int rescanTimer = 0;
@@ -84,14 +81,10 @@ public class AutoBuildModule extends Module {
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
 
-        // Uu tien xu ly fixup (chinh trang thai click-toggle) truoc
         if (!fixupQueue.isEmpty()) {
             FixupTask task = fixupQueue.peekFirst();
-            if (processFixup(task)) {
-                fixupQueue.pollFirst();
-            } else {
-                fixupQueue.pollFirst();
-            }
+            fixupQueue.pollFirst();
+            processFixup(task);
             return;
         }
 
@@ -240,8 +233,6 @@ public class AutoBuildModule extends Module {
             clickSide.getOffsetZ() * 0.5
         );
 
-        // Tinh goc nhin: neu block co huong ngang (facing) mong muon, uu tien nhin theo
-        // huong DOI DIEN voi facing do (giong nguoi choi that dung quay lung lai huong facing).
         Direction desiredHorizontalFacing = getDesiredHorizontalFacing(p.state());
         double dx, dz;
         if (desiredHorizontalFacing != null) {
@@ -265,15 +256,16 @@ public class AutoBuildModule extends Module {
         return true;
     }
 
-    /**
-     * Neu block co thuoc tinh facing ngang (HORIZONTAL_FACING kieu Direction),
-     * lay gia tri mong muon tu desired state. Tra ve null neu khong co.
-     */
-    @SuppressWarnings("unchecked")
+    /** Ham phu tro: lay gia tri thuoc tinh ma khong bi loi generic (dung raw type). */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Comparable<?> getPropValue(BlockState state, Property<?> prop) {
+        return state.get((Property) prop);
+    }
+
     private Direction getDesiredHorizontalFacing(BlockState desired) {
         for (Property<?> prop : desired.getProperties()) {
             if (prop instanceof EnumProperty<?> enumProp && prop.getName().equals("facing")) {
-                Comparable<?> value = desired.get((Property<Comparable<?>>) (Property<?>) enumProp);
+                Comparable<?> value = getPropValue(desired, enumProp);
                 if (value instanceof Direction dir && dir.getAxis().isHorizontal()) {
                     return dir;
                 }
@@ -282,11 +274,6 @@ public class AutoBuildModule extends Module {
         return null;
     }
 
-    /**
-     * Tim mat ke tot nhat de "click" vao khi dat block. Uu tien mat tuong ung voi
-     * huong nguoc lai facing mong muon (de placement logic cua Minecraft tu suy
-     * ra dung facing), neu khong co thi lay bat ky mat nao da co block that.
-     */
     private Direction findBestSupportFace(PendingPlacement p) {
         Direction desiredFacing = getDesiredHorizontalFacing(p.state());
         if (desiredFacing != null) {
@@ -308,25 +295,15 @@ public class AutoBuildModule extends Module {
         return null;
     }
 
-    /**
-     * Sau khi dat, so sanh state that voi state mong muon. Neu con thuoc tinh
-     * kieu "click de doi" (vi du: comparator mode, lever/button powered...)
-     * chua khop, right-click vao block do de thu doi trang thai, gioi han so lan
-     * thu de tranh vong lap vo han.
-     */
-    @SuppressWarnings("unchecked")
     private boolean processFixup(FixupTask task) {
         if (mc.world == null || mc.player == null) return true;
-        if (task.attempts() >= 4) return true; // qua so lan cho phep, bo qua
+        if (task.attempts() >= 4) return true;
 
         BlockState real = mc.world.getBlockState(task.pos());
         BlockState desired = task.desired();
 
-        if (real.getBlock() != desired.getBlock()) return true; // block bi thay doi/pha, bo qua
+        if (real.getBlock() != desired.getBlock()) return true;
 
-        // Bo qua thuoc tinh khong the/khong nen ep bang click:
-        // - "open" (cua/trapdoor): de redstone tu xu ly, bo qua theo yeu cau
-        // - "waterlogged": khong doi bang click
         boolean needsClick = false;
         for (Property<?> prop : desired.getProperties()) {
             String name = prop.getName();
@@ -334,18 +311,18 @@ public class AutoBuildModule extends Module {
                 || name.equals("axis") || name.equals("half") || name.equals("shape")) {
                 continue;
             }
-            Comparable<?> desiredVal = desired.get((Property<Comparable<?>>) (Property<?>) prop);
-            Comparable<?> realVal = real.get((Property<Comparable<?>>) (Property<?>) prop);
+            Comparable<?> desiredVal = getPropValue(desired, prop);
+            Comparable<?> realVal = getPropValue(real, prop);
             if (!desiredVal.equals(realVal)) {
                 needsClick = true;
                 break;
             }
         }
 
-        if (!needsClick) return true; // da khop, xong
+        if (!needsClick) return true;
 
         if (!mc.player.getBlockPos().isWithinDistance(task.pos(), reach.get())) {
-            return true; // qua xa, bo qua fixup nay
+            return true;
         }
 
         Vec3d hitVec = Vec3d.ofCenter(task.pos());
