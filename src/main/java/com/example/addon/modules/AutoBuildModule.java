@@ -10,11 +10,15 @@ import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
+import net.minecraft.state.property.Property;
+import net.minecraft.state.property.EnumProperty;
+import net.minecraft.state.property.BooleanProperty;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.util.StringIdentifiable;
 import net.minecraft.world.World;
 
 import java.lang.reflect.Method;
@@ -59,7 +63,9 @@ public class AutoBuildModule extends Module {
         .build()
     );
 
+    // Danh sach vi tri vua dat, can kiem tra lai/chinh trang thai (click-toggle)
     private final Deque<PendingPlacement> queue = new ArrayDeque<>();
+    private final Deque<FixupTask> fixupQueue = new ArrayDeque<>();
     private int rescanTimer = 0;
 
     public AutoBuildModule() {
@@ -69,6 +75,7 @@ public class AutoBuildModule extends Module {
     @Override
     public void onActivate() {
         queue.clear();
+        fixupQueue.clear();
         rescanTimer = 0;
         AddonTemplate.LOG.info("[AutoBuild] Module bat len.");
     }
@@ -76,6 +83,17 @@ public class AutoBuildModule extends Module {
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
+
+        // Uu tien xu ly fixup (chinh trang thai click-toggle) truoc
+        if (!fixupQueue.isEmpty()) {
+            FixupTask task = fixupQueue.peekFirst();
+            if (processFixup(task)) {
+                fixupQueue.pollFirst();
+            } else {
+                fixupQueue.pollFirst();
+            }
+            return;
+        }
 
         if (rescanTimer <= 0) {
             queue.clear();
@@ -94,6 +112,7 @@ public class AutoBuildModule extends Module {
             if (tryPlace(p)) {
                 queue.pollFirst();
                 placed++;
+                fixupQueue.addLast(new FixupTask(p.pos(), p.state(), 0));
             } else {
                 queue.pollFirst();
             }
@@ -181,11 +200,6 @@ public class AutoBuildModule extends Module {
         return null;
     }
 
-    /**
-     * Tim slot tren hotbar (0-8) co item khop voi block can dat.
-     * Neu tim thay, chuyen sang slot do va tra ve true.
-     * Neu khong co dung item trong hotbar, tra ve false (bo qua vi tri nay).
-     */
     private boolean selectMatchingHotbarSlot(Block desiredBlock) {
         for (int slot = 0; slot < 9; slot++) {
             ItemStack stack = mc.player.getInventory().getStack(slot);
@@ -203,12 +217,11 @@ public class AutoBuildModule extends Module {
             return false;
         }
 
-        // Chi dat neu dang/co the cam dung item - khong dat bua item hien co tren tay
         if (!selectMatchingHotbarSlot(p.state().getBlock())) {
             return false;
         }
 
-        Direction supportFace = findSupportFace(p.pos());
+        Direction supportFace = findBestSupportFace(p);
         BlockPos neighborPos;
         Direction clickSide;
 
@@ -227,15 +240,22 @@ public class AutoBuildModule extends Module {
             clickSide.getOffsetZ() * 0.5
         );
 
-        double dx = hitVec.x - mc.player.getX();
+        // Tinh goc nhin: neu block co huong ngang (facing) mong muon, uu tien nhin theo
+        // huong DOI DIEN voi facing do (giong nguoi choi that dung quay lung lai huong facing).
+        Direction desiredHorizontalFacing = getDesiredHorizontalFacing(p.state());
+        double dx, dz;
+        if (desiredHorizontalFacing != null) {
+            dx = -desiredHorizontalFacing.getOffsetX();
+            dz = -desiredHorizontalFacing.getOffsetZ();
+        } else {
+            dx = hitVec.x - mc.player.getX();
+            dz = hitVec.z - mc.player.getZ();
+        }
         double dy = hitVec.y - (mc.player.getY() + mc.player.getEyeHeight(mc.player.getPose()));
-        double dz = hitVec.z - mc.player.getZ();
         double dist = Math.sqrt(dx * dx + dz * dz);
         float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
 
-        // clientSide = false: chi "xoay ao" (goi tin) de tinh toan dat block,
-        // KHONG xoay camera/man hinh that cua nguoi choi.
         Rotations.rotate(yaw, pitch, 100, false, () -> {
             BlockHitResult hitResult = new BlockHitResult(hitVec, clickSide, neighborPos, false);
             mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
@@ -243,6 +263,40 @@ public class AutoBuildModule extends Module {
         });
 
         return true;
+    }
+
+    /**
+     * Neu block co thuoc tinh facing ngang (HORIZONTAL_FACING kieu Direction),
+     * lay gia tri mong muon tu desired state. Tra ve null neu khong co.
+     */
+    @SuppressWarnings("unchecked")
+    private Direction getDesiredHorizontalFacing(BlockState desired) {
+        for (Property<?> prop : desired.getProperties()) {
+            if (prop instanceof EnumProperty<?> enumProp && prop.getName().equals("facing")) {
+                Comparable<?> value = desired.get((Property<Comparable<?>>) (Property<?>) enumProp);
+                if (value instanceof Direction dir && dir.getAxis().isHorizontal()) {
+                    return dir;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Tim mat ke tot nhat de "click" vao khi dat block. Uu tien mat tuong ung voi
+     * huong nguoc lai facing mong muon (de placement logic cua Minecraft tu suy
+     * ra dung facing), neu khong co thi lay bat ky mat nao da co block that.
+     */
+    private Direction findBestSupportFace(PendingPlacement p) {
+        Direction desiredFacing = getDesiredHorizontalFacing(p.state());
+        if (desiredFacing != null) {
+            Direction preferred = desiredFacing.getOpposite();
+            BlockPos preferredNeighbor = p.pos().offset(preferred);
+            if (!mc.world.getBlockState(preferredNeighbor).isAir()) {
+                return preferred;
+            }
+        }
+        return findSupportFace(p.pos());
     }
 
     private Direction findSupportFace(BlockPos pos) {
@@ -254,5 +308,55 @@ public class AutoBuildModule extends Module {
         return null;
     }
 
+    /**
+     * Sau khi dat, so sanh state that voi state mong muon. Neu con thuoc tinh
+     * kieu "click de doi" (vi du: comparator mode, lever/button powered...)
+     * chua khop, right-click vao block do de thu doi trang thai, gioi han so lan
+     * thu de tranh vong lap vo han.
+     */
+    @SuppressWarnings("unchecked")
+    private boolean processFixup(FixupTask task) {
+        if (mc.world == null || mc.player == null) return true;
+        if (task.attempts() >= 4) return true; // qua so lan cho phep, bo qua
+
+        BlockState real = mc.world.getBlockState(task.pos());
+        BlockState desired = task.desired();
+
+        if (real.getBlock() != desired.getBlock()) return true; // block bi thay doi/pha, bo qua
+
+        // Bo qua thuoc tinh khong the/khong nen ep bang click:
+        // - "open" (cua/trapdoor): de redstone tu xu ly, bo qua theo yeu cau
+        // - "waterlogged": khong doi bang click
+        boolean needsClick = false;
+        for (Property<?> prop : desired.getProperties()) {
+            String name = prop.getName();
+            if (name.equals("open") || name.equals("waterlogged") || name.equals("facing")
+                || name.equals("axis") || name.equals("half") || name.equals("shape")) {
+                continue;
+            }
+            Comparable<?> desiredVal = desired.get((Property<Comparable<?>>) (Property<?>) prop);
+            Comparable<?> realVal = real.get((Property<Comparable<?>>) (Property<?>) prop);
+            if (!desiredVal.equals(realVal)) {
+                needsClick = true;
+                break;
+            }
+        }
+
+        if (!needsClick) return true; // da khop, xong
+
+        if (!mc.player.getBlockPos().isWithinDistance(task.pos(), reach.get())) {
+            return true; // qua xa, bo qua fixup nay
+        }
+
+        Vec3d hitVec = Vec3d.ofCenter(task.pos());
+        BlockHitResult hitResult = new BlockHitResult(hitVec, Direction.UP, task.pos(), false);
+        mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
+        mc.player.swingHand(Hand.MAIN_HAND);
+
+        fixupQueue.addLast(new FixupTask(task.pos(), task.desired(), task.attempts() + 1));
+        return true;
+    }
+
     private record PendingPlacement(BlockPos pos, BlockState state) {}
+    private record FixupTask(BlockPos pos, BlockState desired, int attempts) {}
 }
