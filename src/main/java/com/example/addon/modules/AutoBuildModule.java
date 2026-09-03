@@ -11,6 +11,7 @@ import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.World;
 
 import java.lang.reflect.Method;
 import java.util.ArrayDeque;
@@ -56,7 +57,6 @@ public class AutoBuildModule extends Module {
 
     private final Deque<PendingPlacement> queue = new ArrayDeque<>();
     private int rescanTimer = 0;
-    private boolean dumpedMethods = false;
 
     public AutoBuildModule() {
         super(AddonTemplate.CATEGORY, "auto-build", "Tu dong dat block theo schematic Litematica dang active.");
@@ -66,7 +66,6 @@ public class AutoBuildModule extends Module {
     public void onActivate() {
         queue.clear();
         rescanTimer = 0;
-        dumpedMethods = false;
         AddonTemplate.LOG.info("[AutoBuild] Module bat len.");
     }
 
@@ -105,24 +104,11 @@ public class AutoBuildModule extends Module {
         if (schematicWorld == null) return result;
 
         try {
-            Method getBlockState = null;
-            for (Method m : schematicWorld.getClass().getMethods()) {
-                if (m.getName().equals("getBlockState") && m.getParameterCount() == 1
-                    && m.getParameterTypes()[0] == BlockPos.class) {
-                    getBlockState = m;
-                    break;
-                }
-            }
-            if (getBlockState == null) {
-                if (!dumpedMethods) {
-                    AddonTemplate.LOG.warn("[AutoBuild] Khong tim thay getBlockState(BlockPos). TOAN BO danh sach ham cua class " + schematicWorld.getClass().getName() + ":");
-                    for (Method m : schematicWorld.getClass().getMethods()) {
-                        AddonTemplate.LOG.warn("[AutoBuild]   -> " + m);
-                    }
-                    dumpedMethods = true;
-                }
+            if (!(schematicWorld instanceof World)) {
+                AddonTemplate.LOG.warn("[AutoBuild] schematicWorld khong phai instance cua World: " + schematicWorld.getClass().getName());
                 return result;
             }
+            World schematicMcWorld = (World) schematicWorld;
 
             BlockPos playerPos = mc.player.getBlockPos();
             int r = scanRadius.get();
@@ -133,7 +119,7 @@ public class AutoBuildModule extends Module {
                     for (int dz = -r; dz <= r; dz++) {
                         mutable.set(playerPos.getX() + dx, playerPos.getY() + dy, playerPos.getZ() + dz);
 
-                        BlockState desired = (BlockState) getBlockState.invoke(schematicWorld, mutable);
+                        BlockState desired = schematicMcWorld.getBlockState(mutable);
                         if (desired == null || desired.isAir()) continue;
 
                         BlockState real = mc.world.getBlockState(mutable);
@@ -144,7 +130,7 @@ public class AutoBuildModule extends Module {
                 }
             }
         } catch (Exception e) {
-            AddonTemplate.LOG.error("[AutoBuild] Loi khi doc du lieu Litematica qua reflection", e);
+            AddonTemplate.LOG.error("[AutoBuild] Loi khi doc du lieu Litematica", e);
         }
 
         result.sort(java.util.Comparator.comparingDouble(p ->
