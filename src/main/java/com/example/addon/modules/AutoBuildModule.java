@@ -27,11 +27,10 @@ import java.util.Set;
 
 public class AutoBuildModule extends Module {
 
-    // Cac block ma huong "facing" = CUNG chieu nguoi choi nhin (mat lam viec quay ra xa nguoi choi).
-    // Khac voi lo nuong/ruong... facing nguoc chieu nhin (mat truoc quay ve phia nguoi choi).
-    private static final Set<Block> SAME_DIRECTION_FACING_BLOCKS = Set.of(
-        Blocks.OBSERVER, Blocks.DISPENSER, Blocks.DROPPER,
-        Blocks.PISTON, Blocks.STICKY_PISTON
+    // Nhom thieu so dung quy tac NGUOC chieu nhin (mat truoc quay ve nguoi choi).
+    // Da so block co facing con lai (stairs, thang leo, nut, bien hieu...) dung CUNG chieu nhin.
+    private static final Set<Block> OPPOSITE_DIRECTION_FACING_BLOCKS = Set.of(
+        Blocks.FURNACE, Blocks.BLAST_FURNACE, Blocks.SMOKER
     );
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -242,14 +241,11 @@ public class AutoBuildModule extends Module {
             clickSide.getOffsetZ() * 0.5
         );
 
-        // Tinh huong "nhin" can co de Minecraft tu suy ra dung facing khi dat.
         Direction desiredFacing = getDesiredFacing(p.state());
         double dx, dy, dz;
         if (desiredFacing != null) {
-            // Piston/observer/dispenser/dropper: facing = CUNG chieu nhin.
-            // Cac block khac (lo nuong, v.v.): facing = NGUOC chieu nhin.
-            boolean sameDirection = SAME_DIRECTION_FACING_BLOCKS.contains(p.state().getBlock());
-            Direction aimDir = sameDirection ? desiredFacing : desiredFacing.getOpposite();
+            boolean opposite = OPPOSITE_DIRECTION_FACING_BLOCKS.contains(p.state().getBlock());
+            Direction aimDir = opposite ? desiredFacing.getOpposite() : desiredFacing;
             dx = aimDir.getOffsetX();
             dy = aimDir.getOffsetY();
             dz = aimDir.getOffsetZ();
@@ -263,14 +259,24 @@ public class AutoBuildModule extends Module {
         float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, distXZ));
 
+        BlockPos neighborPosFinal = neighborPos;
+        Direction clickSideFinal = clickSide;
+        Vec3d hitVecFinal = hitVec;
         BlockPos logPos = p.pos();
         BlockState logDesired = p.state();
+
         Rotations.rotate(yaw, pitch, 100, false, () -> {
-            BlockHitResult hitResult = new BlockHitResult(hitVec, clickSide, neighborPos, false);
+            // Kiem tra lai ngay truoc khi click: neighbor co con la block that khong
+            // (tranh click hut neu block ke vua dat truoc do chua duoc server xac nhan kip)
+            if (mc.world.getBlockState(neighborPosFinal).isAir()) {
+                return;
+            }
+
+            BlockHitResult hitResult = new BlockHitResult(hitVecFinal, clickSideFinal, neighborPosFinal, false);
             mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
             mc.player.swingHand(Hand.MAIN_HAND);
 
-            if (logDesired.getBlock() == net.minecraft.block.Blocks.OBSERVER) {
+            if (logDesired.getBlock() == Blocks.OBSERVER) {
                 BlockState realAfter = mc.world.getBlockState(logPos);
                 AddonTemplate.LOG.info("[AutoBuild] OBSERVER tai " + logPos
                     + " | mong muon: " + logDesired
@@ -287,7 +293,6 @@ public class AutoBuildModule extends Module {
         return state.get((Property) prop);
     }
 
-    /** Lay huong facing mong muon (ca ngang lan doc), khong chi rieng huong ngang. */
     private Direction getDesiredFacing(BlockState desired) {
         for (Property<?> prop : desired.getProperties()) {
             if (prop instanceof EnumProperty<?> enumProp && prop.getName().equals("facing")) {
