@@ -263,10 +263,20 @@ public class AutoBuildModule extends Module {
         float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, distXZ));
 
+        BlockPos logPos = p.pos();
+        BlockState logDesired = p.state();
         Rotations.rotate(yaw, pitch, 100, false, () -> {
             BlockHitResult hitResult = new BlockHitResult(hitVec, clickSide, neighborPos, false);
             mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
             mc.player.swingHand(Hand.MAIN_HAND);
+
+            if (logDesired.getBlock() == net.minecraft.block.Blocks.OBSERVER) {
+                BlockState realAfter = mc.world.getBlockState(logPos);
+                AddonTemplate.LOG.info("[AutoBuild] OBSERVER tai " + logPos
+                    + " | mong muon: " + logDesired
+                    + " | thuc te: " + realAfter
+                    + " | yaw/pitch da xoay: " + yaw + "/" + pitch);
+            }
         });
 
         return true;
