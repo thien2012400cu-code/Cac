@@ -4,8 +4,12 @@ import com.example.addon.AddonTemplate;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
+import net.minecraft.item.BlockItem;
+import net.minecraft.item.ItemStack;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
@@ -177,8 +181,30 @@ public class AutoBuildModule extends Module {
         return null;
     }
 
+    /**
+     * Tim slot tren hotbar (0-8) co item khop voi block can dat.
+     * Neu tim thay, chuyen sang slot do va tra ve true.
+     * Neu khong co dung item trong hotbar, tra ve false (bo qua vi tri nay).
+     */
+    private boolean selectMatchingHotbarSlot(Block desiredBlock) {
+        for (int slot = 0; slot < 9; slot++) {
+            ItemStack stack = mc.player.getInventory().getStack(slot);
+            if (stack.isEmpty()) continue;
+            if (stack.getItem() instanceof BlockItem blockItem && blockItem.getBlock() == desiredBlock) {
+                mc.player.getInventory().selectedSlot = slot;
+                return true;
+            }
+        }
+        return false;
+    }
+
     private boolean tryPlace(PendingPlacement p) {
         if (!mc.player.getBlockPos().isWithinDistance(p.pos(), reach.get())) {
+            return false;
+        }
+
+        // Chi dat neu dang/co the cam dung item - khong dat bua item hien co tren tay
+        if (!selectMatchingHotbarSlot(p.state().getBlock())) {
             return false;
         }
 
@@ -187,9 +213,7 @@ public class AutoBuildModule extends Module {
         Direction clickSide;
 
         if (supportFace != null) {
-            // Neighbor thuc su nam o huong supportFace tinh tu vi tri can dat
             neighborPos = p.pos().offset(supportFace);
-            // Tu goc nhin cua neighbor, mat huong ve vi tri can dat la chieu nguoc lai
             clickSide = supportFace.getOpposite();
         } else {
             if (requireExistingSupport.get()) return false;
@@ -203,20 +227,20 @@ public class AutoBuildModule extends Module {
             clickSide.getOffsetZ() * 0.5
         );
 
-        // Xoay camera nhin ve diem sap click (de nhin tu nhien hon, giong nguoi choi that)
         double dx = hitVec.x - mc.player.getX();
         double dy = hitVec.y - (mc.player.getY() + mc.player.getEyeHeight(mc.player.getPose()));
         double dz = hitVec.z - mc.player.getZ();
         double dist = Math.sqrt(dx * dx + dz * dz);
         float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
-        mc.player.setYaw(yaw);
-        mc.player.setPitch(pitch);
 
-        BlockHitResult hitResult = new BlockHitResult(hitVec, clickSide, neighborPos, false);
-
-        mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
-        mc.player.swingHand(Hand.MAIN_HAND);
+        // clientSide = false: chi "xoay ao" (goi tin) de tinh toan dat block,
+        // KHONG xoay camera/man hinh that cua nguoi choi.
+        Rotations.rotate(yaw, pitch, 100, false, () -> {
+            BlockHitResult hitResult = new BlockHitResult(hitVec, clickSide, neighborPos, false);
+            mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
+            mc.player.swingHand(Hand.MAIN_HAND);
+        });
 
         return true;
     }
