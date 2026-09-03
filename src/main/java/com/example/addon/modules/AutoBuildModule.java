@@ -183,19 +183,37 @@ public class AutoBuildModule extends Module {
         }
 
         Direction supportFace = findSupportFace(p.pos());
-        if (supportFace == null) {
+        BlockPos neighborPos;
+        Direction clickSide;
+
+        if (supportFace != null) {
+            // Neighbor thuc su nam o huong supportFace tinh tu vi tri can dat
+            neighborPos = p.pos().offset(supportFace);
+            // Tu goc nhin cua neighbor, mat huong ve vi tri can dat la chieu nguoc lai
+            clickSide = supportFace.getOpposite();
+        } else {
             if (requireExistingSupport.get()) return false;
-            supportFace = Direction.UP;
+            neighborPos = p.pos().offset(Direction.DOWN);
+            clickSide = Direction.UP;
         }
 
-        BlockPos neighborPos = p.pos().offset(supportFace.getOpposite());
         Vec3d hitVec = Vec3d.ofCenter(neighborPos).add(
-            supportFace.getOffsetX() * 0.5,
-            supportFace.getOffsetY() * 0.5,
-            supportFace.getOffsetZ() * 0.5
+            clickSide.getOffsetX() * 0.5,
+            clickSide.getOffsetY() * 0.5,
+            clickSide.getOffsetZ() * 0.5
         );
 
-        BlockHitResult hitResult = new BlockHitResult(hitVec, supportFace, neighborPos, false);
+        // Xoay camera nhin ve diem sap click (de nhin tu nhien hon, giong nguoi choi that)
+        double dx = hitVec.x - mc.player.getX();
+        double dy = hitVec.y - (mc.player.getY() + mc.player.getEyeHeight(mc.player.getPose()));
+        double dz = hitVec.z - mc.player.getZ();
+        double dist = Math.sqrt(dx * dx + dz * dz);
+        float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
+        float pitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
+        mc.player.setYaw(yaw);
+        mc.player.setPitch(pitch);
+
+        BlockHitResult hitResult = new BlockHitResult(hitVec, clickSide, neighborPos, false);
 
         mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
         mc.player.swingHand(Hand.MAIN_HAND);
