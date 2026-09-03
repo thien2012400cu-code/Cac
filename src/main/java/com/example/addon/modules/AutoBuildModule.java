@@ -7,6 +7,7 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
+import net.minecraft.block.Blocks;
 import net.minecraft.block.BlockState;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
@@ -22,8 +23,16 @@ import net.minecraft.world.World;
 import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Set;
 
 public class AutoBuildModule extends Module {
+
+    // Cac block ma huong "facing" = CUNG chieu nguoi choi nhin (mat lam viec quay ra xa nguoi choi).
+    // Khac voi lo nuong/ruong... facing nguoc chieu nhin (mat truoc quay ve phia nguoi choi).
+    private static final Set<Block> SAME_DIRECTION_FACING_BLOCKS = Set.of(
+        Blocks.OBSERVER, Blocks.DISPENSER, Blocks.DROPPER,
+        Blocks.PISTON, Blocks.STICKY_PISTON
+    );
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
@@ -214,7 +223,7 @@ public class AutoBuildModule extends Module {
             return false;
         }
 
-        Direction supportFace = findBestSupportFace(p);
+        Direction supportFace = findSupportFace(p.pos());
         BlockPos neighborPos;
         Direction clickSide;
 
@@ -233,19 +242,26 @@ public class AutoBuildModule extends Module {
             clickSide.getOffsetZ() * 0.5
         );
 
-        Direction desiredHorizontalFacing = getDesiredHorizontalFacing(p.state());
-        double dx, dz;
-        if (desiredHorizontalFacing != null) {
-            dx = -desiredHorizontalFacing.getOffsetX();
-            dz = -desiredHorizontalFacing.getOffsetZ();
+        // Tinh huong "nhin" can co de Minecraft tu suy ra dung facing khi dat.
+        Direction desiredFacing = getDesiredFacing(p.state());
+        double dx, dy, dz;
+        if (desiredFacing != null) {
+            // Piston/observer/dispenser/dropper: facing = CUNG chieu nhin.
+            // Cac block khac (lo nuong, v.v.): facing = NGUOC chieu nhin.
+            boolean sameDirection = SAME_DIRECTION_FACING_BLOCKS.contains(p.state().getBlock());
+            Direction aimDir = sameDirection ? desiredFacing : desiredFacing.getOpposite();
+            dx = aimDir.getOffsetX();
+            dy = aimDir.getOffsetY();
+            dz = aimDir.getOffsetZ();
         } else {
             dx = hitVec.x - mc.player.getX();
+            dy = hitVec.y - (mc.player.getY() + mc.player.getEyeHeight(mc.player.getPose()));
             dz = hitVec.z - mc.player.getZ();
         }
-        double dy = hitVec.y - (mc.player.getY() + mc.player.getEyeHeight(mc.player.getPose()));
-        double dist = Math.sqrt(dx * dx + dz * dz);
+
+        double distXZ = Math.sqrt(dx * dx + dz * dz);
         float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
-        float pitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
+        float pitch = (float) -Math.toDegrees(Math.atan2(dy, distXZ));
 
         Rotations.rotate(yaw, pitch, 100, false, () -> {
             BlockHitResult hitResult = new BlockHitResult(hitVec, clickSide, neighborPos, false);
@@ -256,34 +272,22 @@ public class AutoBuildModule extends Module {
         return true;
     }
 
-    /** Ham phu tro: lay gia tri thuoc tinh ma khong bi loi generic (dung raw type). */
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static Comparable<?> getPropValue(BlockState state, Property<?> prop) {
         return state.get((Property) prop);
     }
 
-    private Direction getDesiredHorizontalFacing(BlockState desired) {
+    /** Lay huong facing mong muon (ca ngang lan doc), khong chi rieng huong ngang. */
+    private Direction getDesiredFacing(BlockState desired) {
         for (Property<?> prop : desired.getProperties()) {
             if (prop instanceof EnumProperty<?> enumProp && prop.getName().equals("facing")) {
                 Comparable<?> value = getPropValue(desired, enumProp);
-                if (value instanceof Direction dir && dir.getAxis().isHorizontal()) {
+                if (value instanceof Direction dir) {
                     return dir;
                 }
             }
         }
         return null;
-    }
-
-    private Direction findBestSupportFace(PendingPlacement p) {
-        Direction desiredFacing = getDesiredHorizontalFacing(p.state());
-        if (desiredFacing != null) {
-            Direction preferred = desiredFacing.getOpposite();
-            BlockPos preferredNeighbor = p.pos().offset(preferred);
-            if (!mc.world.getBlockState(preferredNeighbor).isAir()) {
-                return preferred;
-            }
-        }
-        return findSupportFace(p.pos());
     }
 
     private Direction findSupportFace(BlockPos pos) {
