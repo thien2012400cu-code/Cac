@@ -4,13 +4,13 @@ import com.example.addon.AddonTemplate;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
-import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.BlockState;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
+import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.state.property.Property;
 import net.minecraft.state.property.EnumProperty;
 import net.minecraft.util.Hand;
@@ -27,11 +27,11 @@ import java.util.Set;
 
 public class AutoBuildModule extends Module {
 
-    // Nhom thieu so dung quy tac NGUOC chieu nhin (mat truoc quay ve nguoi choi).
-    // Da so block co facing con lai (stairs, thang leo, nut, bien hieu...) dung CUNG chieu nhin.
     private static final Set<Block> OPPOSITE_DIRECTION_FACING_BLOCKS = Set.of(
         Blocks.FURNACE, Blocks.BLAST_FURNACE, Blocks.SMOKER
     );
+
+    private static final int ROTATE_WAIT_TICKS = 3;
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
@@ -73,6 +73,9 @@ public class AutoBuildModule extends Module {
     private final Deque<FixupTask> fixupQueue = new ArrayDeque<>();
     private int rescanTimer = 0;
 
+    // Tac vu "da xoay, dang cho tick de dat" - chi co 1 tac vu tai 1 thoi diem
+    private PendingRotatePlace pendingRotate = null;
+
     public AutoBuildModule() {
         super(AddonTemplate.CATEGORY, "auto-build", "Tu dong dat block theo schematic Litematica dang active.");
     }
@@ -81,6 +84,7 @@ public class AutoBuildModule extends Module {
     public void onActivate() {
         queue.clear();
         fixupQueue.clear();
+        pendingRotate = null;
         rescanTimer = 0;
         AddonTemplate.LOG.info("[AutoBuild] Module bat len.");
     }
@@ -88,6 +92,16 @@ public class AutoBuildModule extends Module {
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
+
+        // Uu tien xu ly tac vu dang cho xoay xong
+        if (pendingRotate != null) {
+            pendingRotate.ticksLeft--;
+            if (pendingRotate.ticksLeft <= 0) {
+                executePlace(pendingRotate);
+                pendingRotate = null;
+            }
+            return;
+        }
 
         if (!fixupQueue.isEmpty()) {
             FixupTask task = fixupQueue.peekFirst();
@@ -108,7 +122,7 @@ public class AutoBuildModule extends Module {
         }
 
         int placed = 0;
-        while (placed < blocksPerTick.get() && !queue.isEmpty()) {
+        while (placed < blocksPerTick.get() && !queue.isEmpty() && pendingRotate == null) {
             PendingPlacement p = queue.peekFirst();
             if (tryPlace(p)) {
                 queue.pollFirst();
@@ -258,35 +272,37 @@ public class AutoBuildModule extends Module {
         float yaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, distXZ));
 
-        BlockPos neighborPosFinal = neighborPos;
-        Direction clickSideFinal = clickSide;
-        Vec3d hitVecFinal = hitVec;
-        BlockPos logPos = p.pos();
-        BlockState logDesired = p.state();
-        float yawFinal = yaw;
-        float pitchFinal = pitch;
+        // Tu tay gui goi tin xoay (khong nho Meteor Rotations nua), roi doi vai tick
+        // truoc khi gui goi dat block - dung ky thuat cua litematica-printer.
+        mc.player.setYaw(yaw);
+        mc.player.setPitch(pitch);
+        mc.player.networkHandler.sendPacket(
+            new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, mc.player.isOnGround(), false)
+        );
 
-        Rotations.rotate(yaw, pitch, 100, true, () -> {
-            if (mc.world.getBlockState(neighborPosFinal).isAir()) {
-                return;
-            }
-
-            BlockHitResult hitResult = new BlockHitResult(hitVecFinal, clickSideFinal, neighborPosFinal, false);
-            mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
-            mc.player.swingHand(Hand.MAIN_HAND);
-
-            if (logDesired.getBlock() == Blocks.OBSERVER) {
-                BlockState realAfter = mc.world.getBlockState(logPos);
-                AddonTemplate.LOG.info("[AutoBuild] OBSERVER tai " + logPos
-                    + " | mong muon: " + logDesired
-                    + " | thuc te: " + realAfter
-                    + " | yaw/pitch da xoay: " + yawFinal + "/" + pitchFinal);
-            }
-
-            fixupQueue.addLast(new FixupTask(logPos, logDesired, 0));
-        });
+        pendingRotate = new PendingRotatePlace(neighborPos, clickSide, hitVec, p.pos(), p.state(), yaw, pitch, ROTATE_WAIT_TICKS);
 
         return true;
+    }
+
+    private void executePlace(PendingRotatePlace task) {
+        if (mc.world.getBlockState(task.neighborPos).isAir()) {
+            return;
+        }
+
+        BlockHitResult hitResult = new BlockHitResult(task.hitVec, task.clickSide, task.neighborPos, false);
+        mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
+        mc.player.swingHand(Hand.MAIN_HAND);
+
+        if (task.desired.getBlock() == Blocks.OBSERVER) {
+            BlockState realAfter = mc.world.getBlockState(task.pos);
+            AddonTemplate.LOG.info("[AutoBuild] OBSERVER tai " + task.pos
+                + " | mong muon: " + task.desired
+                + " | thuc te: " + realAfter
+                + " | yaw/pitch da xoay: " + task.yaw + "/" + task.pitch);
+        }
+
+        fixupQueue.addLast(new FixupTask(task.pos, task.desired, 0));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -356,4 +372,26 @@ public class AutoBuildModule extends Module {
 
     private record PendingPlacement(BlockPos pos, BlockState state) {}
     private record FixupTask(BlockPos pos, BlockState desired, int attempts) {}
+
+    private static class PendingRotatePlace {
+        final BlockPos neighborPos;
+        final Direction clickSide;
+        final Vec3d hitVec;
+        final BlockPos pos;
+        final BlockState desired;
+        final float yaw;
+        final float pitch;
+        int ticksLeft;
+
+        PendingRotatePlace(BlockPos neighborPos, Direction clickSide, Vec3d hitVec, BlockPos pos, BlockState desired, float yaw, float pitch, int ticksLeft) {
+            this.neighborPos = neighborPos;
+            this.clickSide = clickSide;
+            this.hitVec = hitVec;
+            this.pos = pos;
+            this.desired = desired;
+            this.yaw = yaw;
+            this.pitch = pitch;
+            this.ticksLeft = ticksLeft;
+        }
+    }
 }
