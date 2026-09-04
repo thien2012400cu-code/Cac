@@ -72,6 +72,7 @@ public class AutoBuildModule extends Module {
     private final Deque<PendingPlacement> queue = new ArrayDeque<>();
     private final Deque<FixupTask> fixupQueue = new ArrayDeque<>();
     private int rescanTimer = 0;
+    private PlaceTask delayedPlace = null;
 
     public AutoBuildModule() {
         super(AddonTemplate.CATEGORY, "auto-build", "Tu dong dat block theo schematic Litematica dang active.");
@@ -81,6 +82,7 @@ public class AutoBuildModule extends Module {
     public void onActivate() {
         queue.clear();
         fixupQueue.clear();
+        delayedPlace = null;
         rescanTimer = 0;
         AddonTemplate.LOG.info("[AutoBuild] Module bat len.");
     }
@@ -88,6 +90,15 @@ public class AutoBuildModule extends Module {
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null) return;
+
+        // Neu co placement dang cho (da xoay xong tick truoc), thuc hien dat ngay bay gio.
+        // Tach lam 2 tick de dam bao goi tin XOAY duoc server xu ly xong truoc goi tin DAT BLOCK.
+        if (delayedPlace != null) {
+            PlaceTask task = delayedPlace;
+            delayedPlace = null;
+            executePlace(task);
+            return;
+        }
 
         if (!fixupQueue.isEmpty()) {
             FixupTask task = fixupQueue.peekFirst();
@@ -113,7 +124,6 @@ public class AutoBuildModule extends Module {
             if (tryPlace(p)) {
                 queue.pollFirst();
                 placed++;
-                fixupQueue.addLast(new FixupTask(p.pos(), p.state(), 0));
             } else {
                 queue.pollFirst();
             }
@@ -264,28 +274,36 @@ public class AutoBuildModule extends Module {
         Vec3d hitVecFinal = hitVec;
         BlockPos logPos = p.pos();
         BlockState logDesired = p.state();
+        float yawFinal = yaw;
+        float pitchFinal = pitch;
 
         Rotations.rotate(yaw, pitch, 100, false, () -> {
-            // Kiem tra lai ngay truoc khi click: neighbor co con la block that khong
-            // (tranh click hut neu block ke vua dat truoc do chua duoc server xac nhan kip)
-            if (mc.world.getBlockState(neighborPosFinal).isAir()) {
-                return;
-            }
-
-            BlockHitResult hitResult = new BlockHitResult(hitVecFinal, clickSideFinal, neighborPosFinal, false);
-            mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
-            mc.player.swingHand(Hand.MAIN_HAND);
-
-            if (logDesired.getBlock() == Blocks.OBSERVER) {
-                BlockState realAfter = mc.world.getBlockState(logPos);
-                AddonTemplate.LOG.info("[AutoBuild] OBSERVER tai " + logPos
-                    + " | mong muon: " + logDesired
-                    + " | thuc te: " + realAfter
-                    + " | yaw/pitch da xoay: " + yaw + "/" + pitch);
-            }
+            // Chi LUU lai tac vu dat, KHONG dat ngay - de sang tick sau moi thuc hien,
+            // dam bao goi tin xoay da duoc server xu ly truoc goi tin dat block.
+            delayedPlace = new PlaceTask(neighborPosFinal, clickSideFinal, hitVecFinal, logPos, logDesired, yawFinal, pitchFinal);
         });
 
         return true;
+    }
+
+    private void executePlace(PlaceTask task) {
+        if (mc.world.getBlockState(task.neighborPos()).isAir()) {
+            return;
+        }
+
+        BlockHitResult hitResult = new BlockHitResult(task.hitVec(), task.clickSide(), task.neighborPos(), false);
+        mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, hitResult);
+        mc.player.swingHand(Hand.MAIN_HAND);
+
+        if (task.desired().getBlock() == Blocks.OBSERVER) {
+            BlockState realAfter = mc.world.getBlockState(task.pos());
+            AddonTemplate.LOG.info("[AutoBuild] OBSERVER tai " + task.pos()
+                + " | mong muon: " + task.desired()
+                + " | thuc te (ngay sau click): " + realAfter
+                + " | yaw/pitch da xoay: " + task.yaw() + "/" + task.pitch());
+        }
+
+        fixupQueue.addLast(new FixupTask(task.pos(), task.desired(), 0));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -355,4 +373,5 @@ public class AutoBuildModule extends Module {
 
     private record PendingPlacement(BlockPos pos, BlockState state) {}
     private record FixupTask(BlockPos pos, BlockState desired, int attempts) {}
+    private record PlaceTask(BlockPos neighborPos, Direction clickSide, Vec3d hitVec, BlockPos pos, BlockState desired, float yaw, float pitch) {}
 }
