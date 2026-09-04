@@ -221,36 +221,17 @@ public class AutoBuildModule extends Module {
             return false;
         }
 
-        Direction desiredFacing = getDesiredFacing(p.state());
+        Direction supportFace = findSupportFace(p.pos());
         BlockPos neighborPos;
         Direction clickSide;
-        Direction aimDir = null;
 
-        if (desiredFacing != null) {
-            boolean opposite = OPPOSITE_DIRECTION_FACING_BLOCKS.contains(p.state().getBlock());
-            aimDir = opposite ? desiredFacing.getOpposite() : desiredFacing;
-
-            // QUAN TRONG: khoi ke PHAI nam dung doc theo huong se bi ep nhin, khong
-            // duoc chon bua mat nao khac - neu khong, server tu raycast se thay
-            // huong nhin va mat click khong khop nhau, tu bac/tinh lai facing sai.
-            neighborPos = p.pos().offset(aimDir.getOpposite());
-            clickSide = aimDir;
-
-            if (mc.world.getBlockState(neighborPos).isAir()) {
-                // Chua co khoi ke phu hop de dam bao huong nhin khop mat click.
-                // Bo qua vi tri nay o vong nay, doi vong quet sau khi da co du khoi xung quanh.
-                return false;
-            }
+        if (supportFace != null) {
+            neighborPos = p.pos().offset(supportFace);
+            clickSide = supportFace.getOpposite();
         } else {
-            Direction supportFace = findSupportFace(p.pos());
-            if (supportFace != null) {
-                neighborPos = p.pos().offset(supportFace);
-                clickSide = supportFace.getOpposite();
-            } else {
-                if (requireExistingSupport.get()) return false;
-                neighborPos = p.pos().offset(Direction.DOWN);
-                clickSide = Direction.UP;
-            }
+            if (requireExistingSupport.get()) return false;
+            neighborPos = p.pos().offset(Direction.DOWN);
+            clickSide = Direction.UP;
         }
 
         Vec3d hitVec = Vec3d.ofCenter(neighborPos).add(
@@ -259,8 +240,11 @@ public class AutoBuildModule extends Module {
             clickSide.getOffsetZ() * 0.5
         );
 
+        Direction desiredFacing = getDesiredFacing(p.state());
         double dx, dy, dz;
-        if (aimDir != null) {
+        if (desiredFacing != null) {
+            boolean opposite = OPPOSITE_DIRECTION_FACING_BLOCKS.contains(p.state().getBlock());
+            Direction aimDir = opposite ? desiredFacing.getOpposite() : desiredFacing;
             dx = aimDir.getOffsetX();
             dy = aimDir.getOffsetY();
             dz = aimDir.getOffsetZ();
