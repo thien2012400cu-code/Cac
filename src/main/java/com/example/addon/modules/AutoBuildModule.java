@@ -266,9 +266,9 @@ public class AutoBuildModule extends Module {
         float yawFinal = yaw;
         float pitchFinal = pitch;
 
-        Rotations.rotate(yaw, pitch, 100, false, () -> {
-            // Kiem tra lai ngay truoc khi click: neighbor co con la block that khong
-            // (tranh click hut neu block ke vua dat truoc do chua duoc server xac nhan kip)
+        // clientSide = true: xoay camera THAT (khong con "ao" nua), dam bao server
+        // luon nhan dung goi tin xoay truoc khi xu ly goi tin dat block.
+        Rotations.rotate(yaw, pitch, 100, true, () -> {
             if (mc.world.getBlockState(neighborPosFinal).isAir()) {
                 return;
             }
